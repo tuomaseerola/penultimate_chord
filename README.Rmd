@@ -1,0 +1,180 @@
+---
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# README
+
+This repository contains the data and the analysis operations of the study titled "Pleasantness induction in music through consonance and dissonance: contrasting effect or tonal relation?" by Yuko Arthurs, Imre Lahdelma, and [Tuomas Eerola](https://tuomaseerola.github.io/).
+
+## Load data
+
+```{r, warning=FALSE,message=FALSE,echo=FALSE}
+library(foreign)
+library(tidyverse)
+d <- foreign::read.spss("data/PleDisso1.sav")
+df <- data.frame(d)
+
+# convert into factors
+df$id <- factor(df$id)
+df$Age<-as.numeric(df$Age)
+df$Gender<-factor(as.numeric(df$Gender),levels = c(1,2,3),labels = c("Male","Female","Other"))
+
+df$Roughness<-factor(df$Roughness)
+df$Familiarity<-factor(df$Familiarity)
+df$NoDiaTone<-factor(df$NoDiaTone)
+df$Musicianship<-factor(df$Musicianship)
+df$OSMI<-factor(df$OSMI)
+
+# Add stimulus type descriptions
+s <- read.csv('data/stimulusTable.csv',header = TRUE)
+#table(s$stimType)
+
+stimulustype = c("HRHF_1","HRHF_2","HRLF_1","HRLF_2","LRHF_1","LRHF_2","LRLF_1","LRLF_2")
+stimulusname = c("Major triad with added M2, root highest",
+"Dominant 7th, 1st inversion",
+"Minor-major 7th (no 5th, root doubled in oct)",
+"Diminished + M7",
+"Major triad + oct",
+"Minor triad 1st inversion, 3rd doubled",
+"Diminished 2nd inversion, 5th doubled",
+"Power chord + M6d")
+
+StimLabel<-c("Major+M2", "Dom7", "Min-maj7", "Dim+M7","Major+P8","Minor", "Dim", "Power+M6")
+df$StimLabel <- factor(rep(StimLabel,7*50))
+
+df$StimType<-NA
+df$StimType<-rep(s$stimType,50)
+df$StimTrans<-rep(s$stimTrans,50)
+
+df$StimType<-factor(df$StimType,labels = stimulusname)
+df$StimTrans<-factor(df$StimTrans)
+
+# Make the levels explicit
+df$Familiarity <- factor(df$Familiarity, levels = c(1,2),labels = c("Low","High"))
+df$Roughness <- factor(df$Roughness, levels = c(1,2),labels = c("Low","High"))
+
+df <- drop_na(df) # Delete missing data (1 participant)
+df<-select(df,-NoDiaTone)
+
+knitr::kable(head(df[,6:11]))
+
+```
+
+## Visualise
+
+```{r plots,fig.width=10,fig.height=5,message=FALSE,warning=FALSE}
+library(ggplot2)
+library(tidyr)
+
+S <- df %>%
+  group_by(Roughness,Familiarity,StimLabel) %>%
+  summarise(n=n(),m=mean(Rating,na.rm = TRUE),sd=sd(Rating,na.rm = TRUE)) %>%
+  mutate(se=sd/sqrt(n),LCI=m+qnorm(0.025)*se,UCI=m+qnorm(0.975)*se) 
+
+plsize <- 0.50 # errorbar line width
+pd <- position_dodge(.5) # move them .05 to the left and right
+
+S$RF<-paste(S$Roughness,S$Familiarity)
+
+S$RF<-factor(S$RF,levels = c("High High","High Low","Low High","Low Low"), labels = c("HR-HF","HR-LF","LR-HF","LR-LF"))
+
+g1 <- ggplot(S,aes(x=reorder(StimLabel,-m),y=m,shape=RF,color=RF))+
+  geom_point(size=6,show.legend = TRUE)+
+  geom_errorbar(aes(x=reorder(StimLabel,-m), ymin=LCI, ymax=UCI), width=0.2, linewidth = plsize,position = pd,show.legend = FALSE) + 
+#  scale_fill_manual(values = c('red','blue'))+
+#  scale_fill_manual(name="Roughness & Familiarity", values = c('red','blue'))+
+  scale_color_manual(name="Roughness & Familiarity", values = c('black','black','grey50','grey50'))+
+  scale_shape_manual(name="Roughness & Familiarity", values = c(16,17,21,24))+
+  xlab('Chord Type')+
+  ylab('Pleasantness (Mean ± 95% CI)')+
+  scale_y_continuous(limits = c(4.5,6.3))+
+  theme_bw()+
+  theme(legend.justification=c(0,0), legend.position=c(0.77,0.5))+
+  theme(text=element_text(size=14,  family="serif"))
+print(g1)
+
+```
+
+
+## LMM Analysis of Two Factors
+
+Here we run linear mixed model for Roughness and Familiarity and use participant and transposition as random effects.
+
+```{r lmm1,warning=FALSE,message=FALSE}
+library(lme4)
+library(lmerTest)
+library(emmeans)
+library(effectsize)
+```
+
+## LMM Analysis of Two Fixed Factors and Three Random Factors
+
+```{r lmm2c,warning=FALSE,message=FALSE,results='asis'}
+df2<-dplyr::filter(df,Gender!='Other')
+
+m1 <- lmer(Rating ~ Roughness * Familiarity + (1|id) + (1|StimTrans) + (1|Musicianship), data=df2,REML=FALSE)
+print(knitr::kable(anova(m1)))
+
+```
+# Show Effect sizes using the partial epsilon squared
+
+```{r effectsize,warning=FALSE,message=FALSE}
+F_to_epsilon2(9.1497, 1, 2578.9) # 0.004 
+F_to_epsilon2(204.00, 1, 2578.9) # 0.07
+F_to_epsilon2(40.83, 1, 2578.9) # 0.02 
+```
+
+### Display Random Effects
+
+```{r lmm2ranef,warning=FALSE,message=FALSE}
+# add testing random effects
+print(ranova(m1))
+```
+
+
+## LMM Analysis of Two Factors with additional information
+
+Add musical expertise and gender and age to the mix. Here I first discard the two participants who did not disclose their Gender (for simplicity, we can treat this differently).
+
+```{r lmm2b,warning=FALSE,message=FALSE}
+df2<-dplyr::filter(df,Gender!='Other')
+
+m2 <- lmer(Rating ~ Roughness * Familiarity + Age + Gender + Musicianship + Roughness:Age + Roughness:Gender + Roughness:Musicianship + Familiarity:Age + Familiarity:Gender + Familiarity:Musicianship+ (1|id) + (1|StimTrans), data=df2)
+print(anova(m2))
+```
+
+OK, no interactions between the factors and background factors.
+
+### LMM Analysis of 8 Chords
+
+Are the 8 eight stimuli different from each other?
+
+```{r lmm3,results='asis', eval=TRUE, message=FALSE,warning=FALSE,cache=TRUE}
+library(papaja)
+m1 <- lmer(Rating ~ StimLabel  + (1|id) + (1|StimTrans), data=df)
+s2 <- summary(m1,corr=FALSE)
+
+emm1<- emmeans(m1, specs = pairwise ~ StimLabel, adjust = "bonferroni") # are chords different between all pairings of the tracks?
+
+apa_two <- apa_print(emm1$contrasts)
+apa_table(
+  apa_two$table
+  , caption = "A full table of contrasts."
+)
+```
+
+
+In sum, 19/28 comparisons are significant after correction for multiple comparison.
+
+
+#### Session information
+
+R version and libraries.
+
+```{r}
+print(sessionInfo())
+```
